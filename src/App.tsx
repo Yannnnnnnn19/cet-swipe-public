@@ -46,6 +46,8 @@ function shortTime(value: string | null): string {
 }
 
 type SyncState = "off" | "idle" | "syncing" | "error";
+type SwipeDirection = "left" | "right";
+type SwipeAction = "known" | "unknown";
 
 export default function App() {
   const [data, setData] = useState<CetOfficialDataset | null>(null);
@@ -53,6 +55,9 @@ export default function App() {
   const [loading, setLoading] = useState(true);
   const [started, setStarted] = useState(false);
   const [revealedEntry, setRevealedEntry] = useState<CetOfficialEntry | null>(null);
+  const [swipingEntry, setSwipingEntry] = useState<CetOfficialEntry | null>(null);
+  const [swipeDirection, setSwipeDirection] = useState<SwipeDirection | null>(null);
+  const [swipeAction, setSwipeAction] = useState<SwipeAction | null>(null);
 
   const [syncToken, setSyncToken] = useState<string | null>(null);
   const [syncTokenInput, setSyncTokenInput] = useState("");
@@ -96,8 +101,9 @@ export default function App() {
   }, [data, progress]);
 
   const current = queue[0] ?? null;
-  const displayEntry = revealedEntry ?? current;
+  const displayEntry = swipingEntry ?? revealedEntry ?? current;
   const isRevealed = revealedEntry !== null;
+  const isSwiping = swipingEntry !== null;
   const total = data?.entries.length ?? 0;
   const completed = progress.size;
   const dailyTarget = total ? Math.ceil(total / 10) : 0;
@@ -165,22 +171,47 @@ export default function App() {
   }, [syncNow, syncToken]);
 
   async function chooseKnown() {
-    if (!current || isRevealed) return;
+    if (!current || isRevealed || isSwiping) return;
+
     const selected = current;
     const saved = await saveRecognition(selected.id, "FAMILIAR");
+
+    // Keep the selected card mounted while its exit animation runs, even though
+    // updating progress immediately removes it from the queue.
+    setSwipingEntry(selected);
+    setSwipeDirection("left");
+    setSwipeAction("known");
     setProgress((prev) => new Map(prev).set(selected.id, saved));
+
     if (syncToken) setPendingChanges((value) => value + 1);
   }
 
   async function chooseUnknown() {
-    if (!current || isRevealed) return;
+    if (!current || isRevealed || isSwiping) return;
 
     const selected = current;
-    setRevealedEntry(selected);
-
     const saved = await saveRecognition(selected.id, "UNKNOWN");
+
+    // Unknown words leave to the right first. Only after the swipe finishes do
+    // we reopen the same word as its definition/review card.
+    setSwipingEntry(selected);
+    setSwipeDirection("right");
+    setSwipeAction("unknown");
     setProgress((prev) => new Map(prev).set(selected.id, saved));
+
     if (syncToken) setPendingChanges((value) => value + 1);
+  }
+
+  function finishSwipe() {
+    if (!swipingEntry || !swipeAction) return;
+
+    if (swipeAction === "unknown") {
+      setRevealedEntry(swipingEntry);
+    }
+
+    setSwipingEntry(null);
+    setSwipeDirection(null);
+    setSwipeAction(null);
   }
 
   function continueAfterReveal() {
@@ -217,6 +248,8 @@ export default function App() {
   useEffect(() => {
     function onKeyDown(event: KeyboardEvent) {
       if (!started) return;
+
+      if (isSwiping) return;
 
       if (isRevealed) {
         if (event.key === "ArrowRight" || event.key === "Enter" || event.key === " ") {
@@ -279,7 +312,13 @@ export default function App() {
           </div>
         </header>
 
-        <section className="study-card">
+        <section
+          key={displayEntry ? `${displayEntry.id}-${isRevealed ? "reveal" : "question"}` : "complete"}
+          className={`study-card${swipeDirection ? ` swipe-${swipeDirection}` : ""}${isRevealed ? " reveal-card" : ""}`}
+          onAnimationEnd={(event) => {
+            if (event.target === event.currentTarget && swipeDirection) finishSwipe();
+          }}
+        >
           {displayEntry ? (
             <>
               <div className="word-meta">
@@ -302,12 +341,12 @@ export default function App() {
                 <>
                   <p className="hint">只判断：看到这个词，你是否知道它的常用意思和基本用法？</p>
                   <div className="swipe-actions">
-                    <button className="known-btn" onClick={() => void chooseKnown()}>
+                    <button className="known-btn" onClick={() => void chooseKnown()} disabled={isSwiping}>
                       <span>←</span>
                       <strong>认识</strong>
                       <small>不用复习</small>
                     </button>
-                    <button className="unknown-btn" onClick={() => void chooseUnknown()}>
+                    <button className="unknown-btn" onClick={() => void chooseUnknown()} disabled={isSwiping}>
                       <strong>不知道</strong>
                       <small>显示释义并加入复习</small>
                       <span>→</span>
