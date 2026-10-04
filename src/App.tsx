@@ -319,7 +319,7 @@ export default function App() {
 
         <section
           key={displayEntry ? `${displayEntry.id}-${isRevealed ? "reveal" : "question"}` : "complete"}
-          className={`study-card${swipeDirection ? ` swipe-${swipeDirection}` : ""}${isRevealed ? " reveal-card" : ""}`}
+          className={`study-card${swipeDirection ? ` swipe-${swipeDirection}` : ""}${isRevealed && !swipeDirection ? " reveal-card" : ""}`}
           onAnimationEnd={(event) => {
             if (event.target === event.currentTarget && swipeDirection) finishSwipe();
           }}
