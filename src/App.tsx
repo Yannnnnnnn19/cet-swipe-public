@@ -47,7 +47,7 @@ function shortTime(value: string | null): string {
 
 type SyncState = "off" | "idle" | "syncing" | "error";
 type SwipeDirection = "left" | "right";
-type SwipeAction = "known" | "unknown";
+type SwipeAction = "known" | "advanceUnknown";
 
 export default function App() {
   const [data, setData] = useState<CetOfficialDataset | null>(null);
@@ -190,13 +190,12 @@ export default function App() {
     if (!current || isRevealed || isSwiping) return;
 
     const selected = current;
-    const saved = await saveRecognition(selected.id, "UNKNOWN");
 
-    // Unknown words leave to the right first. Only after the swipe finishes do
-    // we reopen the same word as its definition/review card.
-    setSwipingEntry(selected);
-    setSwipeDirection("right");
-    setSwipeAction("unknown");
+    // Unknown words stay in place while their meaning is revealed. Progress is
+    // saved immediately, but the visible card remains frozen on this word.
+    setRevealedEntry(selected);
+
+    const saved = await saveRecognition(selected.id, "UNKNOWN");
     setProgress((prev) => new Map(prev).set(selected.id, saved));
 
     if (syncToken) setPendingChanges((value) => value + 1);
@@ -205,8 +204,8 @@ export default function App() {
   function finishSwipe() {
     if (!swipingEntry || !swipeAction) return;
 
-    if (swipeAction === "unknown") {
-      setRevealedEntry(swipingEntry);
+    if (swipeAction === "advanceUnknown") {
+      setRevealedEntry(null);
     }
 
     setSwipingEntry(null);
@@ -215,7 +214,13 @@ export default function App() {
   }
 
   function continueAfterReveal() {
-    setRevealedEntry(null);
+    if (!revealedEntry || isSwiping) return;
+
+    // Only after the user has read the definition and chooses to continue does
+    // the unknown card leave to the right.
+    setSwipingEntry(revealedEntry);
+    setSwipeDirection("right");
+    setSwipeAction("advanceUnknown");
   }
 
   async function enableSync() {
