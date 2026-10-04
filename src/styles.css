@@ -140,6 +140,75 @@ h3 { margin-bottom: 0; }
   margin: 28px auto;
   padding: clamp(28px, 6vw, 64px);
   text-align: center;
+  transform-origin: 50% 85%;
+  will-change: transform, opacity;
+  animation: card-enter 180ms cubic-bezier(.22,.61,.36,1) both;
+}
+
+.study-card.swipe-left {
+  pointer-events: none;
+  animation: card-swipe-left 320ms cubic-bezier(.55,.06,.68,.19) forwards;
+}
+
+.study-card.swipe-right {
+  pointer-events: none;
+  animation: card-swipe-right 320ms cubic-bezier(.55,.06,.68,.19) forwards;
+}
+
+.study-card.reveal-card {
+  animation: reveal-card-enter 220ms cubic-bezier(.22,.61,.36,1) both;
+}
+
+@keyframes card-enter {
+  from {
+    opacity: 0;
+    transform: translateY(10px) scale(.985);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0) scale(1);
+  }
+}
+
+@keyframes card-swipe-left {
+  0% {
+    opacity: 1;
+    transform: translateX(0) rotate(0deg) scale(1);
+  }
+  38% {
+    opacity: .96;
+    transform: translateX(-7vw) rotate(-2deg) scale(.995);
+  }
+  100% {
+    opacity: 0;
+    transform: translateX(-115vw) rotate(-10deg) scale(.96);
+  }
+}
+
+@keyframes card-swipe-right {
+  0% {
+    opacity: 1;
+    transform: translateX(0) rotate(0deg) scale(1);
+  }
+  38% {
+    opacity: .96;
+    transform: translateX(7vw) rotate(2deg) scale(.995);
+  }
+  100% {
+    opacity: 0;
+    transform: translateX(115vw) rotate(10deg) scale(.96);
+  }
+}
+
+@keyframes reveal-card-enter {
+  from {
+    opacity: 0;
+    transform: translateX(28px) scale(.985);
+  }
+  to {
+    opacity: 1;
+    transform: translateX(0) scale(1);
+  }
 }
 
 .word-meta {
@@ -392,5 +461,21 @@ h3 { margin-bottom: 0; }
   .sync-panel .panel-head {
     align-items: flex-start;
     flex-direction: column;
+  }
+}
+
+
+.known-btn:disabled,
+.unknown-btn:disabled {
+  cursor: default;
+  opacity: .7;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .study-card,
+  .study-card.swipe-left,
+  .study-card.swipe-right,
+  .study-card.reveal-card {
+    animation-duration: 1ms;
   }
 }
