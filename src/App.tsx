@@ -34,8 +34,7 @@ export default function App() {
   const [progress, setProgress] = useState<Map<string, WordProgress>>(new Map());
   const [loading, setLoading] = useState(true);
   const [started, setStarted] = useState(false);
-  const [revealed, setRevealed] = useState(false);
-  const [lastAction, setLastAction] = useState<"known" | "unknown" | null>(null);
+  const [revealedEntry, setRevealedEntry] = useState<CetOfficialEntry | null>(null);
 
   useEffect(() => {
     async function init() {
@@ -65,6 +64,8 @@ export default function App() {
   }, [data, progress]);
 
   const current = queue[0] ?? null;
+  const displayEntry = revealedEntry ?? current;
+  const isRevealed = revealedEntry !== null;
   const total = data?.entries.length ?? 0;
   const completed = progress.size;
   const dailyTarget = total ? Math.ceil(total / 10) : 0;
@@ -73,36 +74,43 @@ export default function App() {
   const percent = total ? Math.round((completed / total) * 100) : 0;
 
   async function chooseKnown() {
-    if (!current || revealed) return;
-    const saved = await saveRecognition(current.id, "FAMILIAR");
-    setProgress((prev) => new Map(prev).set(current.id, saved));
-    setLastAction("known");
-    setRevealed(false);
+    if (!current || isRevealed) return;
+    const selected = current;
+    const saved = await saveRecognition(selected.id, "FAMILIAR");
+    setProgress((prev) => new Map(prev).set(selected.id, saved));
   }
 
   async function chooseUnknown() {
-    if (!current || revealed) return;
-    const saved = await saveRecognition(current.id, "UNKNOWN");
-    setProgress((prev) => new Map(prev).set(current.id, saved));
-    setLastAction("unknown");
-    setRevealed(true);
+    if (!current || isRevealed) return;
+
+    // Freeze the selected card before updating progress. Updating progress removes
+    // the word from the queue immediately, so rendering from `current` here
+    // would otherwise show the *next* word's definition.
+    const selected = current;
+    setRevealedEntry(selected);
+
+    const saved = await saveRecognition(selected.id, "UNKNOWN");
+    setProgress((prev) => new Map(prev).set(selected.id, saved));
   }
 
   function continueAfterReveal() {
-    setRevealed(false);
-    setLastAction(null);
+    setRevealedEntry(null);
   }
 
   useEffect(() => {
     function onKeyDown(event: KeyboardEvent) {
-      if (!started || !current) return;
-      if (revealed) {
+      if (!started) return;
+
+      if (isRevealed) {
         if (event.key === "ArrowRight" || event.key === "Enter" || event.key === " ") {
           event.preventDefault();
           continueAfterReveal();
         }
         return;
       }
+
+      if (!current) return;
+
       if (event.key === "ArrowLeft") {
         event.preventDefault();
         void chooseKnown();
@@ -132,25 +140,25 @@ export default function App() {
         </header>
 
         <section className="study-card">
-          {current ? (
+          {displayEntry ? (
             <>
               <div className="word-meta">
-                <span className={`priority priority-${current.study_priority.tier}`}>
-                  {priorityLabel[current.study_priority.tier]}
+                <span className={`priority priority-${displayEntry.study_priority.tier}`}>
+                  {priorityLabel[displayEntry.study_priority.tier]}
                 </span>
-                {current.cet6 && <span className="cet6-mark">★ CET-6</span>}
+                {displayEntry.cet6 && <span className="cet6-mark">★ CET-6</span>}
               </div>
 
               <div className="word-main">
-                <h1>{current.headword}</h1>
-                {current.homonym_index && <span className="sense-index">{current.homonym_index}</span>}
+                <h1>{displayEntry.headword}</h1>
+                {displayEntry.homonym_index && <span className="sense-index">{displayEntry.homonym_index}</span>}
               </div>
 
-              {current.lexical?.phonetic && (
+              {displayEntry.lexical?.phonetic && (
                 <p className="phonetic">/{current.lexical.phonetic}/</p>
               )}
 
-              {!revealed ? (
+              {!isRevealed ? (
                 <>
                   <p className="hint">只判断：看到这个词，你是否知道它的常用意思和基本用法？</p>
                   <div className="swipe-actions">
@@ -170,21 +178,21 @@ export default function App() {
                 <div className="reveal-box">
                   <p className="reveal-label">已加入待学词</p>
                   <p className="translation">
-                    {current.lexical?.translation ?? "暂无中文释义，后续进入 fallback 队列。"}
+                    {displayEntry.lexical?.translation ?? "暂无中文释义，后续进入 fallback 队列。"}
                   </p>
 
-                  {current.lexical?.pos?.length ? (
+                  {displayEntry.lexical?.pos?.length ? (
                     <p className="detail-line">
                       词性：{current.lexical.pos.slice(0, 4).map((p) => p.tag).join(" / ")}
                     </p>
                   ) : null}
 
-                  {familyText(current) && (
-                    <p className="detail-line">词族：{familyText(current)}</p>
+                  {familyText(displayEntry) && (
+                    <p className="detail-line">词族：{familyText(displayEntry)}</p>
                   )}
 
-                  {current.variants.length > 0 && (
-                    <p className="detail-line">变体：{current.variants.join(" / ")}</p>
+                  {displayEntry.variants.length > 0 && (
+                    <p className="detail-line">变体：{displayEntry.variants.join(" / ")}</p>
                   )}
 
                   <button className="primary continue-btn" onClick={continueAfterReveal}>
