@@ -155,7 +155,7 @@ export default function App() {
               </div>
 
               {displayEntry.lexical?.phonetic && (
-                <p className="phonetic">/{current.lexical.phonetic}/</p>
+                <p className="phonetic">/{displayEntry.lexical.phonetic}/</p>
               )}
 
               {!isRevealed ? (
@@ -183,7 +183,7 @@ export default function App() {
 
                   {displayEntry.lexical?.pos?.length ? (
                     <p className="detail-line">
-                      词性：{current.lexical.pos.slice(0, 4).map((p) => p.tag).join(" / ")}
+                      词性：{displayEntry.lexical.pos.slice(0, 4).map((p) => p.tag).join(" / ")}
                     </p>
                   ) : null}
 
