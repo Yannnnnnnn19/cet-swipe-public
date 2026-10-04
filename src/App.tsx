@@ -1,10 +1,17 @@
-import { useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import type { CetOfficialDataset, CetOfficialEntry } from "./types/vocabulary";
 import {
+  clearSyncConfig,
   getAllProgress,
+  getSyncConfig,
   saveRecognition,
+  saveSyncConfig,
   type WordProgress,
 } from "./lib/progressDb";
+import {
+  SYNC_REPOSITORY_LABEL,
+  syncProgressWithGitHub,
+} from "./lib/githubSync";
 
 const priorityLabel: Record<CetOfficialEntry["study_priority"]["tier"], string> = {
   A: "重点 · 多源高频",
@@ -29,6 +36,17 @@ function familyText(entry: CetOfficialEntry): string {
     .join(" · ");
 }
 
+function shortTime(value: string | null): string {
+  if (!value) return "尚未同步";
+  return new Intl.DateTimeFormat("zh-CN", {
+    hour: "2-digit",
+    minute: "2-digit",
+    second: "2-digit",
+  }).format(new Date(value));
+}
+
+type SyncState = "off" | "idle" | "syncing" | "error";
+
 export default function App() {
   const [data, setData] = useState<CetOfficialDataset | null>(null);
   const [progress, setProgress] = useState<Map<string, WordProgress>>(new Map());
@@ -36,17 +54,31 @@ export default function App() {
   const [started, setStarted] = useState(false);
   const [revealedEntry, setRevealedEntry] = useState<CetOfficialEntry | null>(null);
 
+  const [syncToken, setSyncToken] = useState<string | null>(null);
+  const [syncTokenInput, setSyncTokenInput] = useState("");
+  const [showSyncSetup, setShowSyncSetup] = useState(false);
+  const [syncState, setSyncState] = useState<SyncState>("off");
+  const [syncMessage, setSyncMessage] = useState("未启用跨设备同步");
+  const [lastSyncedAt, setLastSyncedAt] = useState<string | null>(null);
+  const [pendingChanges, setPendingChanges] = useState(0);
+
   useEffect(() => {
     async function init() {
-      const [dataset, saved] = await Promise.all([
+      const [dataset, saved, config] = await Promise.all([
         fetch(`${import.meta.env.BASE_URL}data/vocabulary.json`).then((r) => {
           if (!r.ok) throw new Error(`Failed to load vocabulary: ${r.status}`);
           return r.json() as Promise<CetOfficialDataset>;
         }),
         getAllProgress(),
+        getSyncConfig(),
       ]);
       setData(dataset);
       setProgress(new Map(saved.map((item) => [item.id, item])));
+      if (config?.enabled && config.token) {
+        setSyncToken(config.token);
+        setSyncState("idle");
+        setSyncMessage("已配置 GitHub Sync");
+      }
       setLoading(false);
     }
 
@@ -73,28 +105,113 @@ export default function App() {
   const unknownCount = [...progress.values()].filter((p) => p.status === "UNKNOWN").length;
   const percent = total ? Math.round((completed / total) * 100) : 0;
 
+  const syncNow = useCallback(async (tokenOverride?: string) => {
+    const token = (tokenOverride ?? syncToken)?.trim();
+    if (!token) return;
+
+    setSyncState("syncing");
+    setSyncMessage("正在与 GitHub 同步…");
+
+    try {
+      const result = await syncProgressWithGitHub(token);
+      setProgress(new Map(result.progress.map((item) => [item.id, item])));
+      setLastSyncedAt(result.syncedAt);
+      setPendingChanges(0);
+      setSyncState("idle");
+
+      if (result.pulled > 0) {
+        setSyncMessage(`已同步，并合并其他设备的 ${result.pulled} 条记录`);
+      } else if (result.pushed) {
+        setSyncMessage("本机进度已同步到 GitHub");
+      } else {
+        setSyncMessage("已是最新");
+      }
+    } catch (error) {
+      console.error(error);
+      setSyncState("error");
+      setSyncMessage(error instanceof Error ? error.message : "同步失败");
+    }
+  }, [syncToken]);
+
+  useEffect(() => {
+    if (!syncToken || !data) return;
+    void syncNow(syncToken);
+  }, [data, syncNow, syncToken]);
+
+  useEffect(() => {
+    if (!syncToken || pendingChanges <= 0) return;
+    const timer = window.setTimeout(() => {
+      void syncNow();
+    }, 8000);
+    return () => window.clearTimeout(timer);
+  }, [pendingChanges, syncNow, syncToken]);
+
+  useEffect(() => {
+    if (!syncToken) return;
+    const timer = window.setInterval(() => {
+      void syncNow();
+    }, 60_000);
+    return () => window.clearInterval(timer);
+  }, [syncNow, syncToken]);
+
+  useEffect(() => {
+    function onVisibilityChange() {
+      if (document.visibilityState === "visible" && syncToken) {
+        void syncNow();
+      }
+    }
+    document.addEventListener("visibilitychange", onVisibilityChange);
+    return () => document.removeEventListener("visibilitychange", onVisibilityChange);
+  }, [syncNow, syncToken]);
+
   async function chooseKnown() {
     if (!current || isRevealed) return;
     const selected = current;
     const saved = await saveRecognition(selected.id, "FAMILIAR");
     setProgress((prev) => new Map(prev).set(selected.id, saved));
+    if (syncToken) setPendingChanges((value) => value + 1);
   }
 
   async function chooseUnknown() {
     if (!current || isRevealed) return;
 
-    // Freeze the selected card before updating progress. Updating progress removes
-    // the word from the queue immediately, so rendering from `current` here
-    // would otherwise show the *next* word's definition.
     const selected = current;
     setRevealedEntry(selected);
 
     const saved = await saveRecognition(selected.id, "UNKNOWN");
     setProgress((prev) => new Map(prev).set(selected.id, saved));
+    if (syncToken) setPendingChanges((value) => value + 1);
   }
 
   function continueAfterReveal() {
     setRevealedEntry(null);
+  }
+
+  async function enableSync() {
+    const token = syncTokenInput.trim();
+    if (!token) {
+      setSyncState("error");
+      setSyncMessage("请输入 Fine-grained GitHub Token。");
+      return;
+    }
+
+    await saveSyncConfig({ token, enabled: true });
+    setSyncToken(token);
+    setSyncTokenInput("");
+    setShowSyncSetup(false);
+    setSyncState("idle");
+    setSyncMessage("已保存到本机，正在验证并同步…");
+  }
+
+  async function disableSync() {
+    await clearSyncConfig();
+    setSyncToken(null);
+    setSyncTokenInput("");
+    setShowSyncSetup(false);
+    setSyncState("off");
+    setSyncMessage("未启用跨设备同步");
+    setLastSyncedAt(null);
+    setPendingChanges(0);
   }
 
   useEffect(() => {
@@ -131,12 +248,35 @@ export default function App() {
     return <main className="shell"><div className="panel">词库加载失败，请检查生成数据。</div></main>;
   }
 
+  const syncBadge =
+    syncState === "syncing"
+      ? "↻ 同步中"
+      : syncState === "error"
+        ? "⚠ 同步异常"
+        : syncToken
+          ? pendingChanges > 0
+            ? `☁ 待同步 ${pendingChanges}`
+            : "☁ 已同步"
+          : "☁ 未启用";
+
   if (started) {
     return (
       <main className="shell study-shell">
         <header className="study-topbar">
           <button className="ghost" onClick={() => setStarted(false)}>← 返回</button>
-          <div className="study-progress-text">{completed} / {total} · {percent}%</div>
+          <div className="study-header-right">
+            {syncToken && (
+              <button
+                className="sync-pill"
+                onClick={() => void syncNow()}
+                disabled={syncState === "syncing"}
+                title={syncMessage}
+              >
+                {syncBadge}
+              </button>
+            )}
+            <div className="study-progress-text">{completed} / {total} · {percent}%</div>
+          </div>
         </header>
 
         <section className="study-card">
@@ -270,6 +410,58 @@ export default function App() {
           <p className="stat-number">{unknownCount}</p>
           <p className="muted">右划后的词会进入下一阶段的重点复习池。</p>
         </article>
+      </section>
+
+      <section className="panel sync-panel">
+        <div className="panel-head">
+          <div>
+            <h3>跨设备同步</h3>
+            <p className="muted sync-repo">{SYNC_REPOSITORY_LABEL} · Private</p>
+          </div>
+          <span className={`sync-status sync-status-${syncState}`}>{syncBadge}</span>
+        </div>
+
+        <p className="sync-message">{syncMessage}</p>
+
+        {syncToken ? (
+          <div className="sync-actions">
+            <button
+              className="primary"
+              onClick={() => void syncNow()}
+              disabled={syncState === "syncing"}
+            >
+              立即同步
+            </button>
+            <button className="ghost danger-ghost" onClick={() => void disableSync()}>
+              移除此设备的 Token
+            </button>
+            <span className="sync-last">上次同步：{shortTime(lastSyncedAt)}</span>
+          </div>
+        ) : showSyncSetup ? (
+          <div className="sync-setup">
+            <label htmlFor="github-token">Fine-grained GitHub Token</label>
+            <input
+              id="github-token"
+              type="password"
+              value={syncTokenInput}
+              onChange={(event) => setSyncTokenInput(event.target.value)}
+              placeholder="github_pat_…"
+              autoComplete="off"
+              spellCheck={false}
+            />
+            <p className="muted">
+              Token 只保存在当前设备浏览器 IndexedDB，不会提交到 GitHub。仅授权 cet-swipe-sync 的 Contents: Read and write。
+            </p>
+            <div className="sync-actions">
+              <button className="primary" onClick={() => void enableSync()}>保存并同步</button>
+              <button className="ghost" onClick={() => setShowSyncSetup(false)}>取消</button>
+            </div>
+          </div>
+        ) : (
+          <button className="primary" onClick={() => setShowSyncSetup(true)}>
+            启用 GitHub Sync
+          </button>
+        )}
       </section>
 
       <section className="panel states">
