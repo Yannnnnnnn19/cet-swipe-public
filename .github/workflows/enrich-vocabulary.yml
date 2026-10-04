@@ -1,0 +1,72 @@
+name: Build enriched CET vocabulary
+
+on:
+  push:
+    paths:
+      - ".github/workflows/enrich-vocabulary.yml"
+      - "data/source/cet-official-core-*.tsv"
+      - "data/source/cet-official-family-*.tsv"
+      - "data/source/highfreq-general.txt"
+      - "data/source/highfreq-listening.txt"
+      - "data/source/highfreq-translation.txt"
+      - "scripts/rebuild_official_from_tsv.py"
+      - "scripts/enrich_ecdict.py"
+      - "scripts/add_study_priority.py"
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  enrich:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Rebuild official CET JSON
+        run: |
+          mkdir -p .cache/cet-build public/data data/generated
+          python scripts/rebuild_official_from_tsv.py             --source-dir data/source             --out .cache/cet-build/cet-official-normalized.json
+
+      - name: Download ECDICT
+        run: |
+          curl -fL --retry 3 --retry-delay 2             https://raw.githubusercontent.com/skywind3000/ECDICT/master/ecdict.csv             -o .cache/ecdict.csv
+          test -s .cache/ecdict.csv
+          python - <<'PY'
+          from pathlib import Path
+          p = Path(".cache/ecdict.csv")
+          print(f"ECDICT bytes: {p.stat().st_size:,}")
+          assert p.stat().st_size > 10_000_000
+          PY
+
+      - name: Enrich CET vocabulary
+        run: |
+          python scripts/enrich_ecdict.py             .cache/cet-build/cet-official-normalized.json             .cache/ecdict.csv             --out public/data/vocabulary.json             --report data/generated/ecdict-report.json
+
+      - name: Add study priority tags
+        run: |
+          python scripts/add_study_priority.py             public/data/vocabulary.json             --source-dir data/source
+
+      - name: Show reports
+        run: |
+          cat data/generated/ecdict-report.json
+          python - <<'PY'
+          import json
+          from pathlib import Path
+          data = json.loads(Path("public/data/vocabulary.json").read_text(encoding="utf-8"))
+          print(json.dumps(data["metadata"].get("study_priority", {}), ensure_ascii=False, indent=2))
+          PY
+
+      - name: Commit generated data
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add public/data/vocabulary.json data/generated/ecdict-report.json
+          if git diff --cached --quiet; then
+            echo "No generated-data changes."
+            exit 0
+          fi
+          git commit -m "data: build ECDICT-enriched CET vocabulary"
+          git push

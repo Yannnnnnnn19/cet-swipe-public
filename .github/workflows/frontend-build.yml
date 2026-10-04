@@ -1,0 +1,23 @@
+name: Frontend build
+
+on:
+  push:
+    paths:
+      - "src/**"
+      - "index.html"
+      - "package.json"
+      - "tsconfig*.json"
+      - "vite.config.ts"
+      - ".github/workflows/frontend-build.yml"
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+      - run: npm install
+      - run: npm run build
